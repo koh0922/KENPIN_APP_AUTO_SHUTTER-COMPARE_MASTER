@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>カメラ画像解析アプリ (Gemini × GAS)</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      width: 100%;
+      margin: 0;
+      padding: 16px;
+      padding-bottom: calc(16px + env(safe-area-inset-bottom));
+      line-height: 1.4;
+      background-color: #f4f5f7;
+      color: #333;
+      transition: background-color 0.4s ease; /* 全体背景の切り替えアニメーション */
+    }
+
+    /* --- アプリ画面全体の判定色スタイル --- */
+    body.bg-ok {
+      background-color: #d4edda; /* 薄い緑色 */
+    }
+    body.bg-ng {
+      background-color: #f8d7da; /* 薄い赤色 */
+    }
+
+    h2 {
+      font-size: 1.3rem;
+      margin: 0 0 16px 0;
+      text-align: center;
+    }
+    h3 {
+      font-size: 1rem;
+      margin: 12px 0 6px 0;
+    }
+
+    /* --- レイアウト構造 --- */
+    .app-container {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      width: 100%;
+    }
+
+    /* --- カメラ枠 ＆ 判定オーバーレイ --- */
+    .video-container {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #000;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    
+    video, canvas.preview-canvas {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    /* 自動撮影用ガイド枠 overlay */
+    .detection-box {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 50%;
+      height: 50%;
+      border: 3px dashed #ffc107; /* 通常：黄色 */
+      box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35); /* 枠外を半透明暗転 */
+      border-radius: 8px;
+      pointer-events: none;
+      transition: border-color 0.3s, background-color 0.3s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .detection-box.moving {
+      border-color: #17a2b8; /* 動き検知中：水色 */
+      border-style: solid;
+    }
+
+    .detection-box.stable {
+      border-color: #28a745; /* 静止検知（撮影）：緑色 */
+      border-style: solid;
+      background-color: rgba(40, 167, 69, 0.2);
+    }
+
+    .status-badge {
+      background: rgba(0,0,0,0.7);
+      color: #fff;
+      padding: 4px 8px;
+      font-size: 12px;
+      border-radius: 4px;
+    }
+
+    .controls {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .toggle-container {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: bold;
+      background: rgba(255, 255, 255, 0.9);
+      padding: 10px 12px;
+      border-radius: 6px;
+      border: 1px solid rgba(0, 0, 0, 0.15);
+    }
+
+    .toggle-container input[type="checkbox"] {
+      width: 20px;
+      height: 20px;
+      cursor: pointer;
+    }
+    
+    /* 複数行入力用に textarea スタイルを設定 */
+    textarea {
+      width: 100%;
+      padding: 12px;
+      font-size: 15px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      background-color: #fff;
+      outline: none;
+      resize: vertical;
+      font-family: inherit;
+      line-height: 1.4;
+    }
+    
+    button {
+      width: 100%;
+      padding: 14px;
+      font-size: 16px;
+      font-weight: bold;
+      color: #fff;
+      background-color: #007bff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      box-shadow: 0 2px 4px rgba(0,123,255,0.2);
+    }
+    
+    button:disabled {
+      background-color: #cccccc;
+      box-shadow: none;
+    }
+    
+    .result-section {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+    }
+
+    .result-box {
+      padding: 14px;
+      background: rgba(255, 255, 255, 0.9); /* 全体背景になじむ透過白 */
+      border: 1px solid rgba(0, 0, 0, 0.15);
+      border-radius: 6px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 0.95rem;
+      min-height: 120px;
+      flex: 1;
+    }
+
+    @media (min-width: 601px) {
+      body {
+        padding: 24px;
+      }
+      h2 {
+        font-size: 1.5rem;
+        margin-bottom: 20px;
+      }
+      .app-container {
+        display: grid;
+        grid-template-columns: 3fr 2fr;
+        gap: 24px;
+        align-items: start;
+      }
+      .right-panel {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+      }
+    }
+
+    @media (max-width: 600px) {
+      .video-container {
+        aspect-ratio: 4 / 3;
+      }
+      button {
+        padding: 12px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <h2>カメラ画像解析アプリ</h2>
+
+  <div class="app-container">
+    <div class="video-container">
+      <video id="camera" autoplay playsinline muted></video>
+      <!-- 自動判定ガイド枠 -->
+      <div id="detectionBox" class="detection-box">
+        <span id="statusBadge" class="status-badge">枠内にモノを配置</span>
+      </div>
+    </div>
+
+    <div class="right-panel">
+      <div class="controls">
+        <!-- 自動シャッター切り替え -->
+        <label class="toggle-container">
+          <input type="checkbox" id="autoModeToggle" checked>
+          枠内検出で自動シャッターを切る
+        </label>
+        
+        <!-- 複数行テキスト入力エリアに変更 -->
+        <textarea id="promptInput" rows="5" placeholder="プロンプトを入力">画像の外観を検品してください。
+
+【判定基準】
+・傷や汚れがある場合は「NG」と判定し、その理由を書いてください。
+・問題がない場合は「OK」と判定してください。</textarea>
+        <button id="sendBtn">手動で撮影してAIに送信</button>
+      </div>
+
+      <div class="result-section">
+        <h3>解析結果:</h3>
+        <div id="result" class="result-box">ここにGeminiの回答が表示されます。</div>
+      </div>
+    </div>
+  </div>
+
+  <canvas id="canvas" style="display: none;"></canvas>
+  <canvas id="detectCanvas" style="display: none;"></canvas>
+
+  <script>
+    const GAS_URL = "https://script.google.com/macros/s/AKfycbxK5-WVgubMrXxlPSbAMyC9E8R3xPq2cwOCcKI-Y_V4-OtNfOfaH6YJnCJr0UtmvnhY/exec";
+  
+    const video = document.getElementById('camera');
+    const canvas = document.getElementById('canvas');
+    const detectCanvas = document.getElementById('detectCanvas');
+    const sendBtn = document.getElementById('sendBtn');
+    const promptInput = document.getElementById('promptInput');
+    const resultDiv = document.getElementById('result');
+    
+    const autoModeToggle = document.getElementById('autoModeToggle');
+    const detectionBox = document.getElementById('detectionBox');
+    const statusBadge = document.getElementById('statusBadge');
+
+    let isProcessing = false;        // 通信中フラグ
+    let isCoolingDown = false;       // 撮影後の冷却期間フラグ
+    let prevFrameData = null;        // 前回フレームの輝度データ
+    let motionDetected = false;      // 動き検出状態
+    let stableStartTime = null;      // 静止開始時刻
+
+    // パラメータ調整値
+    const MOTION_THRESHOLD = 15;     // 動き検知感度 (数値が小さいほど敏感)
+    const STABLE_DURATION_MS = 800;  // 静止と判定する時間（ミリ秒）
+    const COOL_DOWN_MS = 4000;       // 1回撮影後の待機時間（ミリ秒）
+
+    async function initCamera() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: "environment",
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          },
+          audio: false
+        });
+        video.srcObject = stream;
+        video.addEventListener('play', startAutoDetection);
+      } catch (err) {
+        console.error("カメラの起動に失敗しました:", err);
+        resultDiv.textContent = "エラー: カメラへのアクセスが拒否されたか、利用できません。";
+      }
+    }
+
+    // 画像のBase64エンコード抽出
+    function captureImageBase64() {
+      const context = canvas.getContext('2d');
+
+      // 送信サイズの上限を設定（例: 幅640pxに縮小）
+      const maxWidth = 640;
+      const scale = Math.min(1, maxWidth / (video.videoWidth || 640));
+  
+      canvas.width = (video.videoWidth || 640) * scale;
+      canvas.height = (video.videoHeight || 480) * scale;
+
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+      // 画質を 0.5〜0.6 に下げてデータ量を削減   
+      return canvas.toDataURL('image/jpeg', 0.5);
+    }
+
+    // 自動撮影・検知メインループ
+    function startAutoDetection() {
+      const ctx = detectCanvas.getContext('2d');
+      // 解析用キャンバス（軽量化のため縮小サイズ）
+      detectCanvas.width = 160;
+      detectCanvas.height = 120;
+
+      function processFrame() {
+        if (autoModeToggle.checked && !isProcessing && !isCoolingDown && video.readyState === video.HAVE_ENOUGH_DATA) {
+          // 画面中央50%の領域を取得
+          const cropWidth = video.videoWidth * 0.5;
+          const cropHeight = video.videoHeight * 0.5;
+          const startX = (video.videoWidth - cropWidth) / 2;
+          const startY = (video.videoHeight - cropHeight) / 2;
+
+          ctx.drawImage(video, startX, startY, cropWidth, cropHeight, 0, 0, detectCanvas.width, detectCanvas.height);
+          const frameData = ctx.getImageData(0, 0, detectCanvas.width, detectCanvas.height);
+          
+          analyzeFrame(frameData.data);
+        } else if (!autoModeToggle.checked) {
+          resetBoxStatus("自動検知 OFF", "");
+        }
+        
+        requestAnimationFrame(processFrame);
+      }
+      requestAnimationFrame(processFrame);
+    }
+
+    // 枠内の動体・静止解析 logic
+    function analyzeFrame(currentData) {
+      if (!prevFrameData) {
+        prevFrameData = currentData;
+        return;
+      }
+
+      let diffSum = 0;
+      const totalPixels = currentData.length / 4;
+
+      // 輝度差分の簡易計算（グレースケール比較）
+      for (let i = 0; i < currentData.length; i += 4) {
+        const currentGray = (currentData[i] + currentData[i+1] + currentData[i+2]) / 3;
+        const prevGray = (prevFrameData[i] + prevFrameData[i+1] + prevFrameData[i+2]) / 3;
+        diffSum += Math.abs(currentGray - prevGray);
+      }
+
+      const avgDiff = diffSum / totalPixels;
+      prevFrameData = currentData;
+
+      // 状態判定
+      if (avgDiff > MOTION_THRESHOLD) {
+        // 動きを検知
+        motionDetected = true;
+        stableStartTime = null;
+        resetBoxStatus("設置中...", "moving");
+      } else if (motionDetected) {
+        // 動きがあった後に静止した
+        if (!stableStartTime) {
+          stableStartTime = Date.now();
+        } else if (Date.now() - stableStartTime > STABLE_DURATION_MS) {
+          // 指定時間以上静止したためシャッター実行
+          resetBoxStatus("撮影中...", "stable");
+          triggerAutoCapture();
+        }
+      } else {
+        resetBoxStatus("枠内にモノを配置", "");
+      }
+    }
+
+    function resetBoxStatus(text, className) {
+      statusBadge.textContent = text;
+      detectionBox.className = "detection-box " + className;
+    }
+
+    // 自動シャッター実行
+    async function triggerAutoCapture() {
+      motionDetected = false;
+      stableStartTime = null;
+      await sendToGas();
+
+      // クールダウン開始（連写防止）
+      isCoolingDown = true;
+      statusBadge.textContent = "処理完了 (待機中)";
+      setTimeout(() => {
+        isCoolingDown = false;
+      }, COOL_DOWN_MS);
+    }
+
+    // GAS送信処理
+    async function sendToGas() {
+      if (GAS_URL.includes("YOUR_DEPLOYMENT_ID")) {
+        alert("GAS_URL を正しいWebアプリURLに変更してください。");
+        return;
+      }
+
+      isProcessing = true;
+      sendBtn.disabled = true;
+      resultDiv.textContent = "解析中... しばらくお待ちください。";
+
+      // 画面全体の背景色（body）クラスを初期化
+      document.body.classList.remove('bg-ok', 'bg-ng');
+
+      try {
+        const base64Image = captureImageBase64();
+        const promptText = promptInput.value;
+
+        const response = await fetch(GAS_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "text/plain;charset=utf-8"
+          },
+          body: JSON.stringify({
+            image: base64Image,
+            prompt: promptText
+          })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          resultDiv.textContent = data.text;
+
+          // 回答テキストに基づいて画面全体の背景色を変更
+          const textUpper = data.text.toUpperCase();
+          if (textUpper.includes("NG")) {
+            document.body.classList.add('bg-ng');
+          } else if (textUpper.includes("OK")) {
+            document.body.classList.add('bg-ok');
+          }
+        } else {
+          resultDiv.textContent = `エラーが発生しました: ${data.error}`;
+        }
+
+      } catch (error) {
+        console.error("通信エラー:", error);
+        resultDiv.textContent = `通信エラーが発生しました: ${error.message}`;
+      } finally {
+        sendBtn.disabled = false;
+        isProcessing = false;
+      }
+    }
+
+    sendBtn.addEventListener('click', sendToGas);
+    window.addEventListener('load', initCamera);
+  </script>
+</body>
+</html>
