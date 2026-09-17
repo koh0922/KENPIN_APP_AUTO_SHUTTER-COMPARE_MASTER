@@ -1,1 +1,3 @@
 # KENPIN_APP_AUTO_SHUTTER-COMPARE_MASTER
+自動シャッター機能と手本との比較機能を合わせたもの
+通箱チェック用
